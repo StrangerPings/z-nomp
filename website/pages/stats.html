@@ -164,7 +164,9 @@
 					{{ } else { }}
 					    <span style="float:right; color: red;"><small>*PENDING*</small></span>
 					{{ } }}
+                    {{if (block[3] != null) { }}
 					<div><i class="fa fa-gavel"></i><small>Mined By:</small> <a href="/workers/{{=block[3].split('.')[0]}}">{{=block[3]}}</a></div>
+                    {{ } }}
 				</div>
         {{ blockscomb.push(block);}}
 			{{ } }}
@@ -173,7 +175,7 @@
 			{{ var block = it.stats.pools[pool].confirmed.blocks[b].split(":"); }}
 				<div style="margin-bottom: 9px; background-color: #eeeeee; min-width:600px;"><i class="fa fa-bars"></i>
 					<small>Block:</small>
-					{{if (String(it.stats.pools[pool].name).startsWith("zcash")) { }}
+					{{if (String(it.stats.pools[pool].name).startsWith("garlicoin")) { }}
 						<a href="https://garli.co.in/block/{{=block[0]}}" target="_blank">{{=block[2]}}</a>
 					{{ } else { }}
 						{{=block[2]}}
