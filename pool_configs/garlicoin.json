@@ -2,14 +2,14 @@
     "enabled": true,
     "coin": "garlicoin.json",
 
-    "address": "GdZiAVTN39L8xbWKgPWYzUY5bp4X16QkGU",
+    "address": "n2Lk4Vutor7tZWWWHJbECZfCr73gHqbUwH",
 
     "rewardRecipients": {
-        "mvtv43LtsQSeyCaBBb8xRj5ZpNt75zDX21": 5
+        "myCqjzcRkreHr1eWVR83pKfeCEYbtCbr5b": 0
     },
 
     "paymentProcessing": {
-        "enabled": false,
+        "enabled": true,
         "paymentInterval": 20,
         "minimumPayment": 0.1,
         "daemon": {
@@ -22,9 +22,9 @@
 
     "ports": {
         "3333": {
-            "diff": 8,
+            "diff": 0.001,
             "varDiff": {
-                "minDiff": 8,
+                "minDiff": 0.001,
                 "maxDiff": 512,
                 "targetTime": 15,
                 "retargetTime": 90,
