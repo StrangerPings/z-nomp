@@ -70,14 +70,8 @@
       {{ for(var p in it.stats.pools[pool].payments) { }}
 <tr>
           <td>
-          {{if (String(it.stats.pools[pool].name).startsWith("zcash")) { }}
-          <a href="https://explorer.zcha.in/tx/{{=it.stats.pools[pool].payments[p].txid}}"  title="View transaction" target="_blank">{{=it.stats.pools[pool].payments[p].blocks}}</a>
-          {{ } else if (String(it.stats.pools[pool].name).startsWith("zclassic")) { }}
-            <a href="https://classic.zcha.in/tx/{{=it.stats.pools[pool].payments[p].txid}}"  title="View transaction" target="_blank">{{=it.stats.pools[pool].payments[p].blocks}}</a>
-          {{ } else if (String(it.stats.pools[pool].name).startsWith("hush")) { }}
-            <a href="https://explorer.myhush.org/tx/{{=it.stats.pools[pool].payments[p].txid}}"  title="View transaction" target="_blank">{{=it.stats.pools[pool].payments[p].blocks}}</a>
-          {{ } else if (String(it.stats.pools[pool].name).startsWith("zen")) { }}
-            <a href="http://node1.zenchain.info:8886/tx/{{=it.stats.pools[pool].payments[p].txid}}"  title="View transaction" target="_blank">{{=it.stats.pools[pool].payments[p].blocks}}</a>
+          {{if (String(it.stats.pools[pool].name).startsWith("Garlicoin")) { }}
+          <a href="https://garli.co.in/tx/{{=it.stats.pools[pool].payments[p].txid}}"  title="View transaction" target="_blank">{{=it.stats.pools[pool].payments[p].blocks}}</a>
           {{ } else { }}
           {{=it.stats.pools[pool].payments[p].blocks}}
           {{ } }}
