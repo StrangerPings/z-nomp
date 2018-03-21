@@ -21,6 +21,31 @@ module.exports = function (logger) {
     });
 
 
+    /*async.filter(enabledPools, function(coin, callback){
+        SetupForPool(logger, poolConfigs[coin], function(setupResults){
+            callback(setupResults);
+        });
+    }
+
+
+    , function(coins){
+        coins.forEach(function(coin){
+
+            var poolOptions = poolConfigs[coin];
+            var processingConfig = poolOptions.paymentProcessing;
+            var logSystem = 'Payments';
+            var logComponent = coin;
+
+            logger.debug(logSystem, logComponent, 'Payment processing setup to run every '
+                + processingConfig.paymentInterval + ' second(s) with daemon ('
+                + processingConfig.daemon.user + '@' + processingConfig.daemon.host + ':' + processingConfig.daemon.port
+                + ') and redis (' + poolOptions.redis.host + ':' + poolOptions.redis.port + ')');
+
+        });
+    }
+
+    );*/
+
     async.filter(enabledPools, function (coin, callback) {
         SetupForPool(logger, poolConfigs[coin], function (setupResults) {
             callback(null, setupResults);
@@ -53,6 +78,7 @@ function SetupForPool(logger, poolOptions, setupFinished) {
     var coin = poolOptions.coin.name;
     var processingConfig = poolOptions.paymentProcessing;
     var getMarketStats = poolOptions.coin.getMarketStats === true;
+
     var logSystem = 'Payments';
     var logComponent = coin;
 
@@ -66,6 +92,8 @@ function SetupForPool(logger, poolOptions, setupFinished) {
     var coinPrecision;
 
     var paymentInterval;
+
+
 
     async.parallel([
         function (callback) {
@@ -128,6 +156,20 @@ function SetupForPool(logger, poolOptions, setupFinished) {
         setupFinished(true);
     });
 
+
+
+
+    var satoshisToCoins = function (satoshis) {
+        return parseFloat((satoshis / magnitude).toFixed(coinPrecision));
+    };
+
+    var coinsToSatoshies = function (coins) {
+        return coins * magnitude;
+    };
+
+
+
+
     function cacheMarketStats() {
         var marketStatsUpdate = [];
         var coin = logComponent.replace('_testnet', '').toLowerCase();
@@ -159,8 +201,6 @@ function SetupForPool(logger, poolOptions, setupFinished) {
             }
         });
     }
-
-
 
     function cacheNetworkStats () {
         var params = null;
@@ -236,13 +276,12 @@ function SetupForPool(logger, poolOptions, setupFinished) {
         }, market_stats_interval);
     }
 
-    var satoshisToCoins = function (satoshis) {
-        return parseFloat((satoshis / magnitude).toFixed(coinPrecision));
-    };
 
-    var coinsToSatoshies = function (coins) {
-        return coins * magnitude;
-    };
+
+
+
+
+
 
     /* Deal with numbers in smallest possible units (satoshis) as much as possible. This greatly helps with accuracy
        when rounding and whatnot. When we are storing numbers for only humans to see, store in whole coin units. */
@@ -303,11 +342,8 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                 });
             },
 
-            /* 
-                Step 2 - check if mined block coinbase tx are ready for payment
-                         * adds block reward to rounds object
-                         * adds block confirmations count to rounds object
-            */
+            /* Does a batch rpc call to daemon with all the transaction hashes to see if they are confirmed yet.
+               It also adds the block reward amount to the round object - which the daemon gives also gives us. */
             function (workers, rounds, callback) {
 
                 var batchRPCcommand = rounds.map(function (r) {
@@ -410,11 +446,8 @@ function SetupForPool(logger, poolOptions, setupFinished) {
             },
 
 
-            /* 
-                Step 3 - lookup shares and calculate rewards
-                         * pull shares from redis
-                         * calculate rewards
-            */
+            /* Does a batch redis call to get shares contributed to each round. Then calculates the reward
+               amount owned to each miner for each round. */
             function (workers, rounds, addressAccount, callback) {
 
                 var shareLookups = rounds.map(function (r) {
@@ -476,216 +509,77 @@ function SetupForPool(logger, poolOptions, setupFinished) {
             },
 
 
-            /*
-               Step 4 - Generate RPC commands to send payments
-               When deciding the sent balance, it the difference should be -1*amount they had in db,
-               If not sending the balance, the differnce should be +(the amount they earned this round)
-            */
-            function(workers, rounds, addressAccount, callback) {
+            /* Calculate if any payments are ready to be sent and trigger them sending
+             Get balance different for each address and pass it along as object of latest balances such as
+             {worker1: balance1, worker2, balance2}
+             when deciding the sent balance, it the difference should be -1*amount they had in db,
+             if not sending the balance, the differnce should be +(the amount they earned this round)
+             */
+            function (workers, rounds, addressAccount, callback) {
 
-                var tries = 0;
                 var trySend = function (withholdPercent) {
-                    
                     var addressAmounts = {};
-                    var balanceAmounts = {};
-                    var shareAmounts = {};
-                    var timePeriods = {};
-                    var minerTotals = {};
                     var totalSent = 0;
-                    var totalShares = 0;
-                    
-                    // track attempts made, calls to trySend...
-                    tries++;
-                    
-                    // total up miner's balances
-                    for (var w in workers) {
-                        var worker = workers[w];
-                        totalShares += (worker.totalShares || 0)
-                        worker.balance = worker.balance || 0;
-                        worker.reward = worker.reward || 0;
-                        // get miner payout totals
-                        var toSendSatoshis = Math.round((worker.balance + worker.reward) * (1 - withholdPercent));
-                        var address = worker.address = (worker.address || getProperAddress(w.split('.')[0])).trim();
-                        if (minerTotals[address] != null && minerTotals[address] > 0) {
-                            minerTotals[address] += toSendSatoshis;
-                        } else {
-                            minerTotals[address] = toSendSatoshis;
-                        }
-                    }
-                    // now process each workers balance, and pay the miner
                     for (var w in workers) {
                         var worker = workers[w];
                         worker.balance = worker.balance || 0;
                         worker.reward = worker.reward || 0;
-                        var toSendSatoshis = Math.round((worker.balance + worker.reward) * (1 - withholdPercent));
-                        var address = worker.address = (worker.address || getProperAddress(w.split('.')[0])).trim();
-                        // if miners total is enough, go ahead and add this worker balance
-                        if (minerTotals[address] >= minPaymentSatoshis) {
-                            totalSent += toSendSatoshis;
-                            // send funds
-                            worker.sent = satoshisToCoins(toSendSatoshis);
-                            worker.balanceChange = Math.min(worker.balance, toSendSatoshis) * -1;
-                            if (addressAmounts[address] != null && addressAmounts[address] > 0) {
-                                addressAmounts[address] = coinsRound(addressAmounts[address] + worker.sent);
-                            } else {
-                                addressAmounts[address] = worker.sent;
-                            }
-                        } else {
-                            // add to balance, not enough minerals
-                            worker.sent = 0;
-                            worker.balanceChange = Math.max(toSendSatoshis - worker.balance, 0);
-                            // track balance changes
-                            if (worker.balanceChange > 0) {
-                                if (balanceAmounts[address] != null && balanceAmounts[address] > 0) {
-                                    balanceAmounts[address] = coinsRound(balanceAmounts[address] + satoshisToCoins(worker.balanceChange));
-                                } else {
-                                    balanceAmounts[address] = satoshisToCoins(worker.balanceChange);
-                                }
-                            }
-                        }
-                        // track share work
-                        if (worker.totalShares > 0) {
-                            if (shareAmounts[address] != null && shareAmounts[address] > 0) {
-                                shareAmounts[address] += worker.totalShares;
-                            } else {
-                                shareAmounts[address] = worker.totalShares;
-                            }
-                        }
-                    }
-
-                    // if no payouts...continue to next set of callbacks
-                    if (Object.keys(addressAmounts).length === 0){
-                        callback(null, workers, rounds, []);
-                        return;
-                    }
-                    
-                    // do final rounding of payments per address
-                    // this forces amounts to be valid (0.12345678)
-                    for (var a in addressAmounts) {
-                        addressAmounts[a] = coinsRound(addressAmounts[a]);
-                    }
-
-                    // POINT OF NO RETURN! GOOD LUCK!
-                    // WE ARE SENDING PAYMENT CMD TO DAEMON
-                    
-                    // perform the sendmany operation .. addressAccount
-                    var rpccallTracking = 'sendmany "" '+JSON.stringify(addressAmounts);
-                    //console.log(rpccallTracking);
-
-                    daemon.cmd('sendmany', ["", addressAmounts], function (result) {
-                        // check for failed payments, there are many reasons
-                        if (result.error && result.error.code === -6) {
-                            // check if it is because we don't have enough funds
-                            if (result.error.message && result.error.message.includes("insufficient funds")) {
-                                // only try up to XX times (Max, 0.5%)
-                                if (tries < 5) {
-                                    // we thought we had enough funds to send payments, but apparently not...
-                                    // try decreasing payments by a small percent to cover unexpected tx fees?
-                                    var higherPercent = withholdPercent + 0.001; // 0.1%
-                                    logger.warning(logSystem, logComponent, 'Insufficient funds (??) for payments ('+satoshisToCoins(totalSent)+'), decreasing rewards by ' + (higherPercent * 100).toFixed(1) + '% and retrying');
-                                    trySend(higherPercent);
-                                } else {
-                                    logger.warning(logSystem, logComponent, rpccallTracking);
-                                    logger.error(logSystem, logComponent, "Error sending payments, decreased rewards by too much!!!");
-                                    callback(true);
-                                }
-                            } else {
-                                // there was some fatal payment error?
-                                logger.warning(logSystem, logComponent, rpccallTracking);
-                                logger.error(logSystem, logComponent, 'Error sending payments ' + JSON.stringify(result.error));
-                                // payment failed, prevent updates to redis
-                                callback(true);
-                            }
-                            return;
-                        }
-                        else if (result.error && result.error.code === -5) {
-                            // invalid address specified in addressAmounts array
-                            logger.warning(logSystem, logComponent, rpccallTracking);
-                            logger.error(logSystem, logComponent, 'Error sending payments ' + JSON.stringify(result.error));
-                            // payment failed, prevent updates to redis
-                            callback(true);
-                            return;
-                        }
-                        else if (result.error && result.error.message != null) {
-                            // invalid amount, others?
-                            logger.warning(logSystem, logComponent, rpccallTracking);
-                            logger.error(logSystem, logComponent, 'Error sending payments ' + JSON.stringify(result.error));
-                            // payment failed, prevent updates to redis
-                            callback(true);
-                            return;
-                        }
-                        else if (result.error) {
-                            // unknown error
-                            logger.error(logSystem, logComponent, 'Error sending payments ' + JSON.stringify(result.error));
-                            // payment failed, prevent updates to redis
-                            callback(true);
-                            return;
+                        var toSend = (worker.balance + worker.reward) * (1 - withholdPercent);
+                        if (toSend >= minPaymentSatoshis) {
+                            totalSent += toSend;
+                            var address = worker.address = (worker.address || getProperAddress(w));
+                            worker.sent = addressAmounts[address] = satoshisToCoins(toSend);
+                            worker.balanceChange = Math.min(worker.balance, toSend) * -1;
                         }
                         else {
+                            worker.balanceChange = Math.max(toSend - worker.balance, 0);
+                            worker.sent = 0;
+                        }
+                    }
 
-                            // make sure sendmany gives us back a txid
-                            var txid = null;
-                            if (result.response) {
-                                txid = result.response;
+                    if (Object.keys(addressAmounts).length === 0) {
+                        callback(null, workers, rounds);
+                        return;
+                    }
+
+                    daemon.cmd('sendmany', [addressAccount || '', addressAmounts], function (result) {
+                        //Check if payments failed because wallet doesn't have enough coins to pay for tx fees
+                        if (result.error && result.error.code === -6) {
+                            var higherPercent = withholdPercent + 0.01;
+                            logger.warning(logSystem, logComponent, 'Not enough funds to cover the tx fees for sending out payments, decreasing rewards by '
+                                + (higherPercent * 100) + '% and retrying');
+                            trySend(higherPercent);
+                        }
+                        else if (result.error) {
+                            logger.error(logSystem, logComponent, 'Error trying to send payments with RPC sendmany '
+                                + JSON.stringify(result.error));
+                            callback(true);
+                        }
+                        else {
+                            logger.debug(logSystem, logComponent, 'Sent out a total of ' + (totalSent / magnitude)
+                                + ' to ' + Object.keys(addressAmounts).length + ' workers');
+                            if (withholdPercent > 0) {
+                                logger.warning(logSystem, logComponent, 'Had to withhold ' + (withholdPercent * 100)
+                                    + '% of reward from miners to cover transaction fees. '
+                                    + 'Fund pool wallet with coins to prevent this from happening');
                             }
-                            if (txid != null) {
-
-                                // it worked, congrats on your pools payout ;)
-                                logger.special(logSystem, logComponent, 'Sent ' + satoshisToCoins(totalSent)
-                                    + ' to ' + Object.keys(addressAmounts).length + ' miners; txid: '+txid);
-
-                                if (withholdPercent > 0) {
-                                    logger.warning(logSystem, logComponent, 'Had to withhold ' + (withholdPercent * 100)
-                                        + '% of reward from miners to cover transaction fees. '
-                                        + 'Fund pool wallet with coins to prevent this from happening');
-                                }
-
-                                // save payments data to redis
-                                var paymentBlocks = rounds.filter(function(r){ return r.category == 'generate'; }).map(function(r){
-                                    return parseInt(r.height);
-                                });
-                                
-                                var paymentsUpdate = [];
-                                var paymentsData = {time:Date.now(), txid:txid, shares:totalShares, paid:satoshisToCoins(totalSent),  miners:Object.keys(addressAmounts).length, blocks: paymentBlocks, amounts: addressAmounts, balances: balanceAmounts, work:shareAmounts};
-                                paymentsUpdate.push(['zadd', logComponent + ':payments', Date.now(), JSON.stringify(paymentsData)]);
-                                
-                                callback(null, workers, rounds, paymentsUpdate);
-
-                            } else {
-
-                                clearInterval(paymentInterval);
-
-                                logger.error(logSystem, logComponent, 'Error RPC sendmany did not return txid '
-                                    + JSON.stringify(result) + 'Disabling payment processing to prevent possible double-payouts.');
-
-                                callback(true);
-                                return;
-                            }
+                            callback(null, workers, rounds);
                         }
                     }, true, true);
                 };
-                
-                // attempt to send any owed payments
                 trySend(0);
+
             },
+            function (workers, rounds, callback) {
 
+                var totalPaid = 0;
 
-            /*
-                Step 5 - Final redis commands
-            */
-            function(workers, rounds, paymentsUpdate, callback){
-
-                var totalPaid = parseFloat(0);
-                
-                var immatureUpdateCommands = [];
                 var balanceUpdateCommands = [];
                 var workerPayoutsCommand = [];
 
-                // update worker paid/balance stats
                 for (var w in workers) {
                     var worker = workers[w];
-                    // update balances
-                    if ((worker.balanceChange || 0) !== 0){
+                    if (worker.balanceChange !== 0) {
                         balanceUpdateCommands.push([
                             'hincrbyfloat',
                             coin + ':balances',
@@ -693,58 +587,44 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                             satoshisToCoins(worker.balanceChange)
                         ]);
                     }
-                    // update payouts
-                    if ((worker.sent || 0) > 0){
-                        workerPayoutsCommand.push(['hincrbyfloat', coin + ':payouts', w, coinsRound(worker.sent)]);
-                        totalPaid = coinsRound(totalPaid + worker.sent);
-                    }
-                    // update immature balances
-                    if ((worker.immature || 0) > 0) {
-                        immatureUpdateCommands.push(['hset', coin + ':immature', w, worker.immature]);
-                    } else {
-                        immatureUpdateCommands.push(['hset', coin + ':immature', w, 0]);
+                    if (worker.sent !== 0) {
+                        workerPayoutsCommand.push(['hincrbyfloat', coin + ':payouts', w, worker.sent]);
+                        totalPaid += worker.sent;
                     }
                 }
+
+
 
                 var movePendingCommands = [];
                 var roundsToDelete = [];
                 var orphanMergeCommands = [];
-                
-                var confirmsUpdate = [];
-                var confirmsToDelete = [];
-                
-                var moveSharesToCurrent = function(r){
+
+                var moveSharesToCurrent = function (r) {
                     var workerShares = r.workerShares;
-                    if (workerShares != null) {
-                        logger.warning(logSystem, logComponent, 'Moving shares from orphaned block '+r.height+' to current round.');
-                        Object.keys(workerShares).forEach(function(worker){
-                            orphanMergeCommands.push(['hincrby', coin + ':shares:roundCurrent', worker, workerShares[worker]]);
-                        });
-                    }
+                    Object.keys(workerShares).forEach(function (worker) {
+                        orphanMergeCommands.push(['hincrby', coin + ':shares:roundCurrent',
+                            worker, workerShares[worker]]);
+                    });
                 };
 
-                rounds.forEach(function(r){
-                    switch(r.category){
+                rounds.forEach(function (r) {
+
+                    switch (r.category) {
                         case 'kicked':
-                        case 'orphan':
-                            confirmsToDelete.push(['hdel', coin + ':blocksPendingConfirms', r.blockHash]);
                             movePendingCommands.push(['smove', coin + ':blocksPending', coin + ':blocksKicked', r.serialized]);
-                            if (r.canDeleteShares){
+                        case 'orphan':
+                            movePendingCommands.push(['smove', coin + ':blocksPending', coin + ':blocksOrphaned', r.serialized]);
+                            if (r.canDeleteShares) {
                                 moveSharesToCurrent(r);
                                 roundsToDelete.push(coin + ':shares:round' + r.height);
-                                roundsToDelete.push(coin + ':shares:times' + r.height);
                             }
                             return;
-                        case 'immature':
-                            confirmsUpdate.push(['hset', coin + ':blocksPendingConfirms', r.blockHash, (r.confirmations || 0)]);
-                            return;
                         case 'generate':
-                            confirmsToDelete.push(['hdel', coin + ':blocksPendingConfirms', r.blockHash]);
                             movePendingCommands.push(['smove', coin + ':blocksPending', coin + ':blocksConfirmed', r.serialized]);
                             roundsToDelete.push(coin + ':shares:round' + r.height);
-                            roundsToDelete.push(coin + ':shares:times' + r.height);
                             return;
                     }
+
                 });
 
                 var finalRedisCommands = [];
@@ -755,9 +635,6 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                 if (orphanMergeCommands.length > 0)
                     finalRedisCommands = finalRedisCommands.concat(orphanMergeCommands);
 
-                if (immatureUpdateCommands.length > 0)
-                    finalRedisCommands = finalRedisCommands.concat(immatureUpdateCommands);
-                
                 if (balanceUpdateCommands.length > 0)
                     finalRedisCommands = finalRedisCommands.concat(balanceUpdateCommands);
 
@@ -767,35 +644,24 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                 if (roundsToDelete.length > 0)
                     finalRedisCommands.push(['del'].concat(roundsToDelete));
 
-                if (confirmsUpdate.length > 0)
-                    finalRedisCommands = finalRedisCommands.concat(confirmsUpdate);
-                
-                if (confirmsToDelete.length > 0)
-                    finalRedisCommands = finalRedisCommands.concat(confirmsToDelete);
-                
-                if (paymentsUpdate.length > 0)
-                    finalRedisCommands = finalRedisCommands.concat(paymentsUpdate);
-            
                 if (totalPaid !== 0)
                     finalRedisCommands.push(['hincrbyfloat', coin + ':stats', 'totalPaid', totalPaid]);
 
-                if (finalRedisCommands.length === 0){
+                if (finalRedisCommands.length === 0) {
                     callback();
                     return;
                 }
 
                 startRedisTimer();
-                redisClient.multi(finalRedisCommands).exec(function(error, results){
+                redisClient.multi(finalRedisCommands).exec(function (error, results) {
                     endRedisTimer();
-                    if (error) {                        
+                    if (error) {
                         clearInterval(paymentInterval);
-                        
                         logger.error(logSystem, logComponent,
-                                'Payments sent but could not update redis. ' + JSON.stringify(error)
-                                + ' Disabling payment processing to prevent possible double-payouts. The redis commands in '
-                                + coin + '_finalRedisCommands.txt must be ran manually');
-                                
-                        fs.writeFile(coin + '_finalRedisCommands.txt', JSON.stringify(finalRedisCommands), function(err){
+                            'Payments sent but could not update redis. ' + JSON.stringify(error)
+                            + ' Disabling payment processing to prevent possible double-payouts. The redis commands in '
+                            + coin + '_finalRedisCommands.txt must be ran manually');
+                        fs.writeFile(coin + '_finalRedisCommands.txt', JSON.stringify(finalRedisCommands), function (err) {
                             logger.error('Could not write finalRedisCommands.txt, you are fucked.');
                         });
                     }
@@ -803,7 +669,8 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                 });
             }
 
-        ], function(){
+        ], function () {
+
 
             var paymentProcessTime = Date.now() - startPaymentProcess;
             logger.debug(logSystem, logComponent, 'Finished interval - time spent: '
@@ -812,8 +679,6 @@ function SetupForPool(logger, poolOptions, setupFinished) {
 
         });
     };
-
-
 
 
     var getProperAddress = function (address) {
