@@ -1,4 +1,5 @@
 var fs = require('fs');
+var request = require('request');
 
 var redis = require('redis');
 var async = require('async');

@@ -2,6 +2,7 @@
     "name": "Garlicoin",
     "symbol": "GRLC",
     "algorithm": "allium",
+    "getMarketStats": true,
     
     "//": "Coinbase will let explorers know who mined the block, change this to your pool name",
     "coinbase": "HaventChangedTheConfig",
