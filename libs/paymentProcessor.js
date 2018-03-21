@@ -363,8 +363,11 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                 });
             },
 
-            /* Does a batch rpc call to daemon with all the transaction hashes to see if they are confirmed yet.
-               It also adds the block reward amount to the round object - which the daemon gives also gives us. */
+            /* 
+                Step 2 - check if mined block coinbase tx are ready for payment
+                         * adds block reward to rounds object
+                         * adds block confirmations count to rounds object
+            */
             function (workers, rounds, callback) {
 
                 var batchRPCcommand = rounds.map(function (r) {
@@ -384,7 +387,7 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                         return;
                     }
 
-                    var addressAccount;
+                    var addressAccount = "";
 
                     txDetails.forEach(function (tx, i) {
 
@@ -394,7 +397,13 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                         }
 
                         var round = rounds[i];
-
+                        // update confirmations for round
+                        if (tx && tx.result)
+                            round.confirmations = parseInt((tx.result.confirmations || 0));
+                            // console.log('blockHeight: '+round.height);
+                            // console.log('blockConfirmations: '+round.confirmations);
+                        
+                        // look for transaction errors
                         if (tx.error && tx.error.code === -5) {
                             logger.warning(logSystem, logComponent, 'Daemon reports invalid transaction: ' + round.txHash);
                             round.category = 'kicked';
@@ -410,7 +419,7 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                                 + JSON.stringify(tx));
                             return;
                         }
-
+                        // get the coin base generation tx
                         var generationTx = tx.result.details.filter(function (tx) {
                             return tx.address === poolOptions.address;
                         })[0];
@@ -425,8 +434,9 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                                 + round.txHash);
                             return;
                         }
-
+                        // get transaction category for round
                         round.category = generationTx.category;
+                        // get reward for newly generated blocks
                         if (round.category === 'generate') {
                             round.reward = generationTx.amount || generationTx.value;
                         }
@@ -762,7 +772,6 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                 };
 
                 rounds.forEach(function (r) {
-
                     switch (r.category) {
                         case 'kicked':
                             movePendingCommands.push(['smove', coin + ':blocksPending', coin + ':blocksKicked', r.serialized]);
@@ -779,7 +788,6 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                             logger.special(logSystem, logComponent, 'Block confirmed!');
                             return;
                     }
-
                 });
 
                 var finalRedisCommands = [];
@@ -801,7 +809,7 @@ function SetupForPool(logger, poolOptions, setupFinished) {
 
                 if (paymentsUpdate.length > 0)
                     finalRedisCommands = finalRedisCommands.concat(paymentsUpdate)
-                
+
                 if (totalPaid !== 0)
                     finalRedisCommands.push(['hincrbyfloat', coin + ':stats', 'totalPaid', totalPaid]);
 
