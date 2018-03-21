@@ -70,8 +70,14 @@
       {{ for(var p in it.stats.pools[pool].payments) { }}
 <tr>
           <td>
-          {{if (String(it.stats.pools[pool].name).startsWith("Garlicoin")) { }}
-          <a href="https://garli.co.in/tx/{{=it.stats.pools[pool].payments[p].txid}}"  title="View transaction" target="_blank">{{=it.stats.pools[pool].payments[p].blocks}}</a>
+          {{if (String(it.stats.pools[pool].name).startsWith("garlicoin")) { }}
+
+            {{ for(var block in it.stats.pools[pool].payments[p].blocks) { }}
+              <a href="https://garli.co.in/tx/{{=it.stats.pools[pool].payments[p].txid}}"  title="View transaction" target="_blank">{{=it.stats.pools[pool].payments[p].blocks[block]}}</a>
+            {{ } }}
+          
+          
+
           {{ } else { }}
           {{=it.stats.pools[pool].payments[p].blocks}}
           {{ } }}
