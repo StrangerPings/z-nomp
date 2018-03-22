@@ -21,7 +21,6 @@ module.exports = function (logger) {
             enabledPools.push(coin);
     });
 
-
     /*async.filter(enabledPools, function(coin, callback){
         SetupForPool(logger, poolConfigs[coin], function(setupResults){
             callback(setupResults);
@@ -72,9 +71,7 @@ module.exports = function (logger) {
     });
 };
 
-
 function SetupForPool(logger, poolOptions, setupFinished) {
-
 
     var coin = poolOptions.coin.name;
     var processingConfig = poolOptions.paymentProcessing;
@@ -93,8 +90,6 @@ function SetupForPool(logger, poolOptions, setupFinished) {
     var coinPrecision;
 
     var paymentInterval;
-
-
 
     async.parallel([
         function (callback) {
@@ -157,9 +152,6 @@ function SetupForPool(logger, poolOptions, setupFinished) {
         setupFinished(true);
     });
 
-
-
-
     var satoshisToCoins = function (satoshis) {
         return parseFloat((satoshis / magnitude).toFixed(coinPrecision));
     };
@@ -167,9 +159,6 @@ function SetupForPool(logger, poolOptions, setupFinished) {
     var coinsToSatoshies = function (coins) {
         return coins * magnitude;
     };
-
-
-
 
     function cacheMarketStats() {
         var marketStatsUpdate = [];
@@ -397,12 +386,11 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                         }
 
                         var round = rounds[i];
+                        
                         // update confirmations for round
                         if (tx && tx.result)
                             round.confirmations = parseInt((tx.result.confirmations || 0));
-                            // console.log('blockHeight: '+round.height);
-                            // console.log('blockConfirmations: '+round.confirmations);
-                        
+
                         // look for transaction errors
                         if (tx.error && tx.error.code === -5) {
                             logger.warning(logSystem, logComponent, 'Daemon reports invalid transaction: ' + round.txHash);
@@ -440,7 +428,6 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                         if (round.category === 'generate') {
                             round.reward = generationTx.amount || generationTx.value;
                         }
-
                     });
 
                     var canDeleteShares = function (r) {
@@ -456,14 +443,15 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                         return true;
                     };
 
-
-                    //Filter out all rounds that are immature (not confirmed or orphaned yet)
+                    //Filter out orphaned / kicked blocks
                     rounds = rounds.filter(function (r) {
                         switch (r.category) {
                             case 'orphan':
                             case 'kicked':
                                 r.canDeleteShares = canDeleteShares(r);
                             case 'generate':
+                                return true;
+                            case 'immature':
                                 return true;
                             default:
                                 return false;
@@ -509,7 +497,7 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                                 delete workerShares[key];
                             }
                         }
-
+                        
                         switch (round.category) {
                             case 'kicked':
                             case 'orphan':
@@ -738,11 +726,14 @@ function SetupForPool(logger, poolOptions, setupFinished) {
 
                 var totalPaid = 0;
 
+                // var immatureUpdateCommands = [];
                 var balanceUpdateCommands = [];
                 var workerPayoutsCommand = [];
 
+                // update worker paid/balance stats
                 for (var w in workers) {
                     var worker = workers[w];
+                    // update balances
                     if (worker.balanceChange !== 0) {
                         balanceUpdateCommands.push([
                             'hincrbyfloat',
@@ -751,17 +742,19 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                             satoshisToCoins(worker.balanceChange)
                         ]);
                     }
+                    // update payouts
                     if (worker.sent !== 0) {
                         workerPayoutsCommand.push(['hincrbyfloat', coin + ':payouts', w, worker.sent]);
                         totalPaid += worker.sent;
                     }
                 }
 
-
-
                 var movePendingCommands = [];
                 var roundsToDelete = [];
                 var orphanMergeCommands = [];
+
+                var confirmsUpdate = [];
+                var confirmsToDelete = [];
 
                 var moveSharesToCurrent = function (r) {
                     var workerShares = r.workerShares;
@@ -772,6 +765,7 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                 };
 
                 rounds.forEach(function (r) {
+
                     switch (r.category) {
                         case 'kicked':
                             movePendingCommands.push(['smove', coin + ':blocksPending', coin + ':blocksKicked', r.serialized]);
@@ -783,10 +777,13 @@ function SetupForPool(logger, poolOptions, setupFinished) {
                             }
                             return;
                         case 'generate':
+                            confirmsToDelete.push(['hdel', coin + ':blocksPendingConfirms', r.blockHash]);
                             movePendingCommands.push(['smove', coin + ':blocksPending', coin + ':blocksConfirmed', r.serialized]);
                             roundsToDelete.push(coin + ':shares:round' + r.height);
-                            logger.special(logSystem, logComponent, 'Block confirmed!');
                             return;
+                        case 'immature':   
+                            confirmsUpdate.push(['hset', coin + ':blocksPendingConfirms', r.blockHash, (r.confirmations || 0)]);
+                            return;                               
                     }
                 });
 
@@ -797,6 +794,12 @@ function SetupForPool(logger, poolOptions, setupFinished) {
 
                 if (orphanMergeCommands.length > 0)
                     finalRedisCommands = finalRedisCommands.concat(orphanMergeCommands);
+
+                if (confirmsUpdate.length > 0)
+                    finalRedisCommands = finalRedisCommands.concat(confirmsUpdate);
+                
+                if (confirmsToDelete.length > 0)
+                    finalRedisCommands = finalRedisCommands.concat(confirmsToDelete);
 
                 if (balanceUpdateCommands.length > 0)
                     finalRedisCommands = finalRedisCommands.concat(balanceUpdateCommands);
